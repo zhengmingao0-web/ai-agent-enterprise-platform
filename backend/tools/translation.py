@@ -16,6 +16,7 @@ def translation_tool(text: str, target_lang: str = "英文") -> str:
         "英文": {"你好": "Hello", "谢谢": "Thank you", "再见": "Goodbye"},
         "日文": {"你好": "こんにちは", "谢谢": "ありがとう", "再见": "さようなら"},
         "法文": {"你好": "Bonjour", "谢谢": "Merci", "再见": "Au revoir"},
+        "韩文": {"你好": "안녕하세요", "谢谢": "감사합니다", "再见": "안녕히 가세요"},
     }
     result = mock.get(target_lang, {}).get(text)
     if result:
