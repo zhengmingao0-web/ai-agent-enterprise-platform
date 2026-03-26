@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>企业级多Agent任务执行平台</title>
+  <style>
+    /* ── 重置 + 全局 ───────────────────────────────────────────
+       html/body 都锁死到 100%，是所有内部滚动生效的前提
+    ─────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+    }
+
+    /* ── Header：固定在顶部，高度 56px ──────────────────────── */
+    header {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 56px;
+      z-index: 10;
+      background: linear-gradient(135deg, #1a1f2e, #16213e);
+      border-bottom: 1px solid #2d3748;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; color: #90cdf4; }
+    header .badge {
+      background: #2b6cb0; color: #bee3f8;
+      font-size: 0.68rem; padding: 2px 8px;
+      border-radius: 20px; font-weight: 600;
+    }
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #48bb78; box-shadow: 0 0 6px #48bb78;
+      margin-left: auto; animation: pulse 2s infinite;
+    }
+    .status-dot.idle    { background: #718096; box-shadow: none; animation: none; }
+    .status-dot.running { background: #f6ad55; box-shadow: 0 0 8px #f6ad55; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* ── Main：header 以下撑满全屏，position:fixed 最可靠 ──── */
+    main {
+      position: fixed;
+      top: 56px; left: 0; right: 0; bottom: 0;
+      display: flex;
+    }
+
+    /* ── 左侧边栏：固定宽度，整体可纵向滚动 ─────────────────── */
+    .sidebar {
+      width: 300px;
+      flex-shrink: 0;
+      background: #1a1f2e;
+      border-right: 1px solid #2d3748;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;          /* 子 section 用各自的 overflow */
+    }
+
+    .sidebar-section {
+      border-bottom: 1px solid #2d3748;
+      padding: 14px;
+      flex-shrink: 0;            /* 前两个 section 不压缩 */
+    }
+
+    /* 任务计划 section 占剩余空间并可滚动 */
+    .sidebar-plan {
+      border-bottom: 1px solid #2d3748;
+      padding: 14px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .sidebar-title {
+      font-size: 0.72rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: #718096; margin-bottom: 10px;
+      flex-shrink: 0;
+    }
+
+    #plan-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    /* ── 右侧内容区：flex 列，分 statusbar + 两个面板 ────────── */
+    .content-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .content-top {
+      flex-shrink: 0;
+      height: 48px;
+      background: #13171f;
+      border-bottom: 1px solid #2d3748;
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #718096;
+      font-size: 0.88rem;
+    }
+
+    /* 执行日志 + 最终报告各占 50% */
+    .content-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .panel-block {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .panel-block + .panel-block {
+      border-top: 1px solid #2d3748;
+    }
+
+    .panel-header {
+      flex-shrink: 0;
+      font-size: 0.7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: #4a5568; padding: 6px 20px;
+      background: #0f1117;
+      border-bottom: 1px solid #1a1f2e;
+    }
+
+    /* ── 执行日志面板（可滚动） ──────────────────────────────── */
+    .log-panel {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 20px;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 0.82rem;
+      line-height: 1.7;
+      min-height: 0;
+    }
+
+    .log-entry { display: flex; gap: 12px; padding: 1px 0; }
+    .log-entry .time { color: #4a5568; flex-shrink: 0; }
+    .log-entry.planner .msg { color: #9ae6b4; }
+    .log-entry.router  .msg { color: #faf089; }
+    .log-entry.tool    .msg { color: #90cdf4; }
+    .log-entry.rag     .msg { color: #b794f4; }
+    .log-entry.report  .msg { color: #fbb6ce; }
+    .log-entry.system  .msg { color: #718096; }
+
+    /* ── 报告面板（可滚动） ──────────────────────────────────── */
+    .report-panel {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      background: #11141b;
+      min-height: 0;
+    }
+
+    #report-placeholder {
+      color: #4a5568; font-size: 0.88rem;
+      height: 100%; display: flex;
+      align-items: center; justify-content: center;
+    }
+
+    #report-content {
+      display: none;
+      line-height: 1.8; color: #e2e8f0; font-size: 0.9rem;
+    }
+    #report-content h1,h2,h3 { color: #90cdf4; margin: 14px 0 6px; }
+    #report-content h1 { font-size: 1.2rem; border-bottom: 1px solid #2d3748; padding-bottom: 6px; }
+    #report-content h2 { font-size: 1.05rem; }
+    #report-content h3 { font-size: 0.95rem; color: #bee3f8; }
+    #report-content p  { margin: 6px 0; }
+    #report-content ul, #report-content ol { margin: 6px 0 6px 20px; }
+    #report-content li { margin: 3px 0; }
+    #report-content strong { color: #faf089; }
+    #report-content code {
+      background: #1a1f2e; padding: 1px 6px;
+      border-radius: 4px; font-family: monospace; color: #f6ad55;
+    }
+    #report-content pre {
+      background: #1a1f2e; padding: 12px;
+      border-radius: 8px; overflow-x: auto; margin: 6px 0;
+    }
+    #report-content blockquote {
+      border-left: 3px solid #4299e1;
+      padding-left: 12px; color: #a0aec0; margin: 6px 0;
+    }
+
+    /* ── 表单控件 ────────────────────────────────────────────── */
+    textarea {
+      width: 100%; background: #0f1117;
+      border: 1px solid #2d3748; border-radius: 8px;
+      color: #e2e8f0; font-size: 0.88rem; padding: 10px;
+      resize: vertical; min-height: 90px;
+      outline: none; font-family: inherit;
+      transition: border-color 0.2s;
+    }
+    textarea:focus { border-color: #4299e1; }
+
+    .btn-run {
+      margin-top: 8px; width: 100%; padding: 10px;
+      background: linear-gradient(135deg, #2b6cb0, #4299e1);
+      color: white; border: none; border-radius: 8px;
+      font-size: 0.92rem; font-weight: 600;
+      cursor: pointer; transition: opacity 0.2s, transform 0.1s;
+    }
+    .btn-run:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-run:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .examples { display: flex; flex-direction: column; gap: 6px; }
+    .example-btn {
+      background: #1a1f2e; border: 1px solid #2d3748;
+      border-radius: 6px; color: #90cdf4; cursor: pointer;
+      font-size: 0.78rem; padding: 7px 10px;
+      text-align: left; transition: background 0.2s; line-height: 1.4;
+    }
+    .example-btn:hover { background: #2d3748; }
+
+    /* 任务卡片 */
+    .task-item {
+      background: #0f1117; border: 1px solid #2d3748;
+      border-radius: 6px; padding: 8px 10px; font-size: 0.8rem;
+      flex-shrink: 0;
+    }
+    .task-item .task-header {
+      display: flex; justify-content: space-between;
+      align-items: center; margin-bottom: 4px;
+    }
+    .task-agent {
+      font-size: 0.68rem; padding: 2px 6px;
+      border-radius: 4px; font-weight: 600;
+    }
+    .task-agent.tool_agent   { background: #2d3748; color: #90cdf4; }
+    .task-agent.rag_agent    { background: #1a365d; color: #bee3f8; }
+    .task-agent.report_agent { background: #1c4532; color: #9ae6b4; }
+    .task-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .task-status.pending { background: #718096; }
+    .task-status.running { background: #f6ad55; box-shadow: 0 0 4px #f6ad55; }
+    .task-status.done    { background: #48bb78; }
+    .task-status.failed  { background: #fc8181; }
+    .task-desc { color: #a0aec0; line-height: 1.4; }
+
+    /* ── 滚动条 ──────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3a4155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4a5568; }
+  </style>
+</head>
+<body>
+
+<header>
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4299e1" stroke-width="2">
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+  </svg>
+  <h1>企业级多Agent平台</h1>
+  <span class="badge">DeepSeek + LangGraph</span>
+  <div class="status-dot idle" id="status-dot"></div>
+</header>
+
+<main>
+  <!-- 左侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">任务输入</div>
+      <textarea id="query-input" placeholder="输入你的任务，例如：
+分析AI大模型的市场现状，计算GPT-4和DeepSeek的参数量之比，并生成投资分析报告"></textarea>
+      <button class="btn-run" id="run-btn" onclick="runTask()">
+        ▶ 执行任务
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">快捷示例</div>
+      <div class="examples">
+        <button class="example-btn" onclick="setExample(this)">
+          分析DeepSeek和GPT-4的技术差异，计算1024*768的分辨率像素数，生成对比报告
+        </button>
+        <button class="example-btn" onclick="setExample(this)">
+          搜索RAG技术的核心原理，用Python代码演示列表推导式，汇总成技术报告
+        </button>
+        <button class="example-btn" onclick="setExample(this)">
+          查询LangGraph框架特点，计算斐波那契数列前10项之和，生成学习笔记
+        </button>
+      </div>
+    </div>
+
+    <div class="sidebar-plan">
+      <div class="sidebar-title">任务计划</div>
+      <div id="plan-list">
+        <div style="color:#4a5568; font-size:0.82rem;">等待任务执行...</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 右侧内容区 -->
+  <div class="content-area">
+    <div class="content-top">
+      <span id="status-text">就绪 — 输入任务后点击执行</span>
+    </div>
+
+    <div class="content-main">
+      <!-- 执行日志 -->
+      <div class="panel-block">
+        <div class="panel-header">执行日志</div>
+        <div class="log-panel" id="log-panel">
+          <div class="log-entry system">
+            <span class="time">--:--:--</span>
+            <span class="msg">系统就绪，等待任务输入...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 最终报告 -->
+      <div class="panel-block">
+        <div class="panel-header">最终报告</div>
+        <div class="report-panel">
+          <div id="report-placeholder">报告将在任务完成后显示...</div>
+          <div id="report-content"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── 工具函数 ──────────────────────────────────────────────────
+
+function now() {
+  return new Date().toLocaleTimeString('zh-CN', {hour12: false});
+}
+
+function addLog(msg, type = 'system') {
+  const panel = document.getElementById('log-panel');
+  const entry = document.createElement('div');
+
+  // 根据日志内容自动判断类型
+  let cls = type;
+  if (msg.includes('[Planner]'))  cls = 'planner';
+  else if (msg.includes('[Router]')) cls = 'router';
+  else if (msg.includes('[ToolAgent]') || msg.includes('[Tool]')) cls = 'tool';
+  else if (msg.includes('[RAGAgent]') || msg.includes('[RAG]'))  cls = 'rag';
+  else if (msg.includes('[ReportAgent]')) cls = 'report';
+
+  entry.className = `log-entry ${cls}`;
+  entry.innerHTML = `<span class="time">${now()}</span><span class="msg">${escapeHtml(msg)}</span>`;
+  panel.appendChild(entry);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// 简单 Markdown 渲染
+function renderMarkdown(text) {
+  return text
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm,  '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm,   '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,    '<em>$1</em>')
+    .replace(/`(.+?)`/g,      '<code>$1</code>')
+    .replace(/^- (.+)$/gm,    '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+    .replace(/^> (.+)$/gm,    '<blockquote>$1</blockquote>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/^(?!<[h|u|b|o|l|p])/gm, '')
+    || text;
+}
+
+function setStatusDot(state) {
+  const dot = document.getElementById('status-dot');
+  dot.className = `status-dot ${state}`;
+}
+
+function setStatus(text) {
+  document.getElementById('status-text').textContent = text;
+}
+
+function renderPlan(plan) {
+  const container = document.getElementById('plan-list');
+  container.innerHTML = plan.map((t, i) => `
+    <div class="task-item" id="task-${t.id}">
+      <div class="task-header">
+        <span style="color:#718096; font-size:0.7rem;">任务 ${i + 1}</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span class="task-agent ${t.agent}">${t.agent}</span>
+          <span class="task-status ${t.status}"></span>
+        </div>
+      </div>
+      <div class="task-desc">${escapeHtml(t.description)}</div>
+    </div>
+  `).join('');
+}
+
+function setExample(btn) {
+  document.getElementById('query-input').value = btn.textContent.trim();
+}
+
+// ── 核心执行逻辑 ──────────────────────────────────────────────
+
+function runTask() {
+  const query = document.getElementById('query-input').value.trim();
+  if (!query) { alert('请输入任务内容'); return; }
+
+  // 重置界面
+  document.getElementById('log-panel').innerHTML = '';
+  document.getElementById('plan-list').innerHTML = '<div style="color:#4a5568; font-size:0.82rem;">规划中...</div>';
+  document.getElementById('report-placeholder').style.display = 'flex';
+  document.getElementById('report-content').style.display = 'none';
+  document.getElementById('run-btn').disabled = true;
+
+  setStatusDot('running');
+  setStatus('正在连接 Agent 系统...');
+  addLog('任务已提交，正在启动 Agent 流水线...', 'system');
+
+  // 建立 WebSocket 连接
+  const wsUrl = `ws://${location.host}/ws/run`;
+  const ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    setStatus('Agent 系统已连接，开始执行...');
+    ws.send(JSON.stringify({ query }));
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+
+    switch (msg.type) {
+      case 'log':
+        addLog(msg.data);
+        break;
+
+      case 'plan':
+        renderPlan(msg.data);
+        setStatus(`任务计划已生成 (${msg.data.length} 个子任务)`);
+        break;
+
+      case 'report':
+        document.getElementById('report-placeholder').style.display = 'none';
+        const rc = document.getElementById('report-content');
+        rc.style.display = 'block';
+        rc.innerHTML = `<div>${renderMarkdown(msg.data)}</div>`;
+        break;
+
+      case 'done':
+        setStatusDot('');  // 绿色稳定
+        setStatus('所有任务执行完成 ✓');
+        addLog('✓ 任务流水线执行完毕', 'system');
+        document.getElementById('run-btn').disabled = false;
+        ws.close();
+        break;
+
+      case 'error':
+        setStatusDot('idle');
+        setStatus(`错误: ${msg.data}`);
+        addLog(`✗ 错误: ${msg.data}`, 'system');
+        document.getElementById('run-btn').disabled = false;
+        break;
+    }
+  };
+
+  ws.onerror = () => {
+    setStatusDot('idle');
+    setStatus('WebSocket 连接失败');
+    addLog('✗ 无法连接到后端服务，请确认服务已启动', 'system');
+    document.getElementById('run-btn').disabled = false;
+  };
+
+  ws.onclose = () => {
+    if (document.getElementById('run-btn').disabled) {
+      // 正常关闭不做处理
+    }
+  };
+}
+
+// 回车 + Ctrl+Enter 提交
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('query-input').addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') runTask();
+  });
+});
+</script>
+
+</body>
+</html>
